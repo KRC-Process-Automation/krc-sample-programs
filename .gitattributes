@@ -1,0 +1,4 @@
+*.project binary
+*.adpro binary
+*.eap9 binary
+*.st text eol=crlf

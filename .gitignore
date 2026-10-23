@@ -1,0 +1,6 @@
+# per-user files CODESYS writes next to a project when it is opened
+*.opt
+*.precompilecache
+*.bootinfo*
+*.compileinfo
+*.~u
