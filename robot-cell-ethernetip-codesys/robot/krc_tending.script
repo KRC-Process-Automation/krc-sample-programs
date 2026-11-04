@@ -1,0 +1,211 @@
+# krc_tending.script - the robot's half of the KRC robot cell sample (URScript, PolyScope 5).
+# KRC (Kurtin Robotics), a teaching example. The PLC (a WAGO CC100) runs the cell and is the EtherNet/IP
+# scanner; the robot is the adapter. This program reads the robot's general purpose input registers (the PLC
+# writes them) and writes its output registers (the PLC reads them), registers 0 to 23 being the fieldbus ones.
+#
+#   PLC -> robot, input integer registers:  0 PLC heartbeat, 1 command (1 load, 2 unload), 2 fixture clear,
+#                                           3 PLC step
+#   robot -> PLC, output integer registers: 0 robot heartbeat, 1 ready, 2 acknowledge, 3 done,
+#                                           4 fault (1 gripper missed), 5 robot step (see the steps below)
+#
+# Set up on the robot (Installation): EtherNet/IP on; in I/O Setup, input bit registers 0, 1, and 2 given the
+# actions Start, Stop, and Pause, so the PLC starts, stops, and pauses this program; this program loaded as the
+# default at power-up; the robot in Remote Control. The PLC asks the Dashboard Server (port 29999) whether the
+# program is playing, paused, or stopped.
+#
+# The handshake for one command: the PLC writes the command; this program echoes it in output register 2
+# (acknowledge), does the move, reaching into the fixture only while input register 2 is 1, and echoes it in
+# output register 3 (done); the PLC writes 0 to the command; this program clears 2 and 3 and goes back to ready.
+#
+# Stop can come at any moment, and the arm stays where it was. So every time this program starts, it checks
+# it's at home first, and if it isn't, it says so in its step and stops rather than move: someone jogs it home,
+# then presses Start again. In the PolyScope program (krc_tending.urp, generated from this file) the first move
+# is to where the arm already is: started from an input, PolyScope drives the arm to the program's first waypoint
+# before any of the program runs (URSim, 2026-10-26), and that would carry it home before this check.
+#
+# The robot step, in output register 5, for the PLC's screen:
+#   10 starting, checking it's at home      100 at home, waiting for a command
+#   200 load: picking a part                 210 load: waiting for fixture clear     220 load: placing the part
+#   300 unload: waiting for fixture clear    310 unload: taking the part out         320 unload: dropping the part
+#   400 done, waiting for the PLC to clear the command
+#   800 gripper missed, going home           900 started away from home, stopped
+#
+# NOT A SAFETY FUNCTION. Nothing here stops the robot for a person. The robot's own safety configuration
+# (protective stop, safeguard inputs, the e-stop) does that.
+#
+# The waypoints are placeholders: teach them on the cell (or in URSim) and replace the poses below. The gripper
+# lines are placeholders too: swap in the gripper's own URCap commands.
+
+def krc_tending():
+  # ---- the waypoints, taught on the cell (joint positions, radians) ----
+  home       = [0.0, -1.57, 1.57, -1.57, -1.57, 0.0]
+  pick_above = [0.6, -1.40, 1.70, -1.87, -1.57, 0.6]
+  pick       = [0.6, -1.30, 1.85, -2.12, -1.57, 0.6]
+  fix_above  = [-0.6, -1.40, 1.70, -1.87, -1.57, -0.6]
+  fix        = [-0.6, -1.30, 1.85, -2.12, -1.57, -0.6]
+  drop_above = [1.2, -1.40, 1.70, -1.87, -1.57, 1.2]
+  drop       = [1.2, -1.30, 1.85, -2.12, -1.57, 1.2]
+  HOME_TOLERANCE = 0.05     # radians, each joint: closer than this to home counts as at home
+
+  # ---- the registers, by name: IN_ are input registers (from the PLC), OUT_ output registers (to it) ----
+  IN_COMMAND = 1
+  IN_FIXTURE_CLEAR = 2
+  OUT_HEARTBEAT = 0
+  OUT_READY = 1
+  OUT_ACK = 2
+  OUT_DONE = 3
+  OUT_FAULT = 4
+  OUT_STEP = 5
+  CMD_LOAD = 1
+  CMD_UNLOAD = 2
+
+  # ---- the robot step: what this program is doing, for the PLC's screen ----
+  def set_step(step):
+    write_output_integer_register(OUT_STEP, step)
+  end
+
+  # ---- the gripper (placeholders: the gripper URCap's own commands go here) ----
+  def gripper_close():
+    set_tool_digital_out(0, True)
+    sleep(0.5)
+  end
+  def gripper_open():
+    set_tool_digital_out(0, False)
+    sleep(0.5)
+  end
+  def gripper_has_part():
+    # The gripper's part-detect signal. A miss is reported to the PLC as fault 1.
+    return get_tool_digital_in(0)
+  end
+
+  # ---- at home: every joint within the tolerance of the home position ----
+  def at_home():
+    q = get_actual_joint_positions()
+    i = 0
+    while i < 6:
+      if norm(q[i] - home[i]) > HOME_TOLERANCE:
+        return False
+      end
+      i = i + 1
+    end
+    return True
+  end
+
+  # ---- the heartbeat: a thread counts it up every 250 ms, as long as this program runs ----
+  thread heartbeat_thread():
+    beat = 0
+    while True:
+      beat = (beat + 1) % 32768
+      write_output_integer_register(OUT_HEARTBEAT, beat)
+      sleep(0.25)
+    end
+  end
+
+  # ---- reaching into the fixture: only while the PLC says it's clear ----
+  def into_fixture(waiting_step):
+    set_step(waiting_step)
+    while read_input_integer_register(IN_FIXTURE_CLEAR) != 1:
+      sync()
+    end
+    movel(get_forward_kin(fix), a=0.5, v=0.15)
+  end
+
+  # ---- one command ----
+  def do_load():
+    set_step(200)
+    movej(pick_above, a=1.2, v=1.0)
+    movel(get_forward_kin(pick), a=0.5, v=0.15)
+    gripper_close()
+    movel(get_forward_kin(pick_above), a=0.5, v=0.25)
+    if not gripper_has_part():
+      return False
+    end
+    movej(fix_above, a=1.2, v=1.0)
+    into_fixture(210)
+    set_step(220)
+    gripper_open()
+    movel(get_forward_kin(fix_above), a=0.5, v=0.25)
+    movej(home, a=1.2, v=1.0)
+    return True
+  end
+
+  def do_unload():
+    set_step(300)
+    movej(fix_above, a=1.2, v=1.0)
+    into_fixture(300)
+    set_step(310)
+    gripper_close()
+    movel(get_forward_kin(fix_above), a=0.5, v=0.25)
+    if not gripper_has_part():
+      return False
+    end
+    set_step(320)
+    movej(drop_above, a=1.2, v=1.0)
+    movel(get_forward_kin(drop), a=0.5, v=0.15)
+    gripper_open()
+    movel(get_forward_kin(drop_above), a=0.5, v=0.25)
+    movej(home, a=1.2, v=1.0)
+    return True
+  end
+
+  # ---- start: everything clear, then check it's at home before it moves at all ----
+  set_step(10)
+  write_output_integer_register(OUT_READY, 0)
+  write_output_integer_register(OUT_ACK, 0)
+  write_output_integer_register(OUT_DONE, 0)
+  write_output_integer_register(OUT_FAULT, 0)
+  if not at_home():
+    # Stopped mid-move last time (Stop on the panel, or a fault). Moving home from here could hit the fixture
+    # or the part, so it doesn't try: it says so and stops. Jog it home, then press Start.
+    set_step(900)
+    popup("The robot is away from home. Jog it home, then press Start on the panel.", "KRC cell", warning=True, blocking=False)
+    halt
+  end
+  gripper_open()
+  movej(home, a=1.2, v=1.0)
+  beat_thread = run heartbeat_thread()
+
+  while True:
+    # Ready: at home, waiting for a command.
+    set_step(100)
+    write_output_integer_register(OUT_READY, 1)
+    cmd = read_input_integer_register(IN_COMMAND)
+    while cmd != CMD_LOAD and cmd != CMD_UNLOAD:
+      sync()
+      cmd = read_input_integer_register(IN_COMMAND)
+    end
+
+    # Acknowledge: echo the command, and stop being ready while it's busy.
+    write_output_integer_register(OUT_READY, 0)
+    write_output_integer_register(OUT_ACK, cmd)
+
+    # The move.
+    if cmd == CMD_LOAD:
+      ok = do_load()
+    else:
+      ok = do_unload()
+    end
+
+    if ok:
+      # Done: echo the command.
+      write_output_integer_register(OUT_DONE, cmd)
+    else:
+      # The gripper missed: report it, open, go home.
+      set_step(800)
+      write_output_integer_register(OUT_FAULT, 1)
+      gripper_open()
+      movej(home, a=1.2, v=1.0)
+    end
+
+    # Wait for the PLC to drop the command, then clear the handshake.
+    set_step(400)
+    while read_input_integer_register(IN_COMMAND) != 0:
+      sync()
+    end
+    write_output_integer_register(OUT_ACK, 0)
+    write_output_integer_register(OUT_DONE, 0)
+    write_output_integer_register(OUT_FAULT, 0)
+  end
+end
+
+krc_tending()

@@ -8,6 +8,7 @@ The PLC programs from Kurtin Robotics' PLC Programming videos on YouTube, so you
 | [`motor-ramp-codesys/`](motor-ramp-codesys/) | The same program in Structured Text, rung for rung, with its screen | CODESYS V3.5 SP19 (free) on a WAGO CC100 |
 | [`clamp-station-codesys/`](clamp-station-codesys/) | A two-hand clamp station built from a blank project: analog in and out, faults, a simulation program | CODESYS V3.5 SP19 (free) on a WAGO CC100 |
 | [`motor-ramp-alarms-codesys/`](motor-ramp-alarms-codesys/) | The motor ramp taken further: an alarm list, a timeout on every step that waits on the machine, and a screen that names what Ready is waiting for | CODESYS V3.5 SP19 (free) on a WAGO CC100 |
+| [`robot-cell-ethernetip-codesys/`](robot-cell-ethernetip-codesys/) | The clamp station loaded and unloaded by a UR robot: EtherNet/IP with a four-step handshake, Start, Stop, and Pause bits, the Dashboard for the program's state, and a heartbeat | CODESYS V3.5 SP19 (free) on a WAGO CC100, with URSim 5.12 (free) or a UR on PolyScope 5 |
 
 Every program runs on a PC with no hardware, in the software's own simulator. The folder's README says what to install and how to run it.
 
